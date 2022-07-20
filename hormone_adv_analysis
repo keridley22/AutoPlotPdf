@@ -1,0 +1,347 @@
+from dataclasses import dataclass
+import pandas as pd
+import numpy as np
+import os
+import math
+import scipy
+import matplotlib.pyplot as plt
+import re
+import seaborn as sns
+import statsmodels.api as sm
+import scipy.stats as stats
+
+
+
+
+class initial_data_handling():
+    def __init__(self, data_path):
+        self.data_path = data_path
+        self.dataframe = pd.read_csv(self.data_path)
+        
+    # RETRIEVE SAMPLE AND PATIENT DATA FROM BARCODE
+    def get_sample_data_from_barcode(self):
+        data = self.dataframe
+        for index, row in data.iterrows():
+            if (row['Type']=='Saliva') & (row['Shipment']==2):            
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva'), 'Sample'] = data['Samples'].str.split(' ', expand=True)[0]
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva'), 'Patient ID'] = data['Samples'].str.split(' ', expand=True)[1]
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva'), 'Group'] = data['Patient ID'].str.extract('\d{2}(\w{1})', expand=True)[0]
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva'), 'Patient ID'] = data['Patient ID'].str.extract('(\d{2})\w', expand=True)[0] 
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva'), 'Date'] = data['Samples'].str.split(' ', expand=True)[2]
+
+        # Best of both worlds with mutability - add a new variable to self _and_ return new dataframe
+        self.barcode_split_dataframe = data
+        # Instead of saving, just return new dataframe
+        return(self.barcode_split_dataframe)
+
+
+    # Takes variable information from similar entries and applies it to other appropriate entries
+    def get_variable_information_group_a(self, barcode_split_data):
+        data = barcode_split_data
+        samples = ['S1C', 'S2C', 'S3C']
+        patients = list(data.loc[(data['Shipment']==2) & (data['Group']=='A'), 'Patient ID'].unique())
+        patients.remove(11)
+        for s in samples:
+            for p in patients:
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Subgroup']=data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Subgroup'].values[0]
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Subgroup']=data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Subgroup'].values[0]
+                data.loc[(data['Shipment']==2) & (data['Sample']==s) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Time']=data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Time'].values[0]
+        self.variable_information_group_a = data
+        return self.variable_information_group_a
+
+    def get_variable_information_group_b(self, variable_information_group_a):
+        data = variable_information_group_a
+        samples = ['STC']
+        patients = list(data.loc[(data['Shipment']==2) & (data['Group']=='B'), 'Patient ID'].unique())
+
+        patients.remove(13)
+        for s in samples:
+            for p in patients:
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Subgroup']='TRANSFER'
+                data.loc[(data['Shipment']==2) & (data['Sample']==s) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Time']=data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Time'].values[0]
+
+        self.variable_information_group_b = data
+        return self.variable_information_group_b
+        
+
+    def scale_progesterone_to_pg(self, data):
+        data['Progesterone (pg/mL)']=data['Progesterone (pg/mL)'].astype(float)
+        data.loc[(data['Type']=='Blood'), 'Progesterone (pg/mL)'] = data.loc[(data['Type']=='Blood'), 'Progesterone (pg/mL)']*1000
+        return data
+
+class data_cleaning():
+    def __init__(self, dataframe):
+        self.dataframe = dataframe
+
+    def remove_outliers_3std_method(self):
+        data = self.dataframe
+        samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
+        types = list(data['Type'].unique())
+
+        for s in samples:
+            for t in types:
+                
+                data=data.loc[s & (data['Type']==t)]
+                
+
+                E=data['Estradiol (pg/mL)'].astype(float)
+                P=data['Progesterone (pg/mL)'].astype(float)
+                upperE = E.mean() + 3*E.std()
+
+                lowerE = E.mean() -3*E.std()
+
+                upperP = P.mean() + 3*P.std()
+
+                lowerP = P.mean() -3*P.std()
+
+                data= data[(E<upperE) & (E>lowerE)]
+                data= data[(P<upperP) & (P>lowerP)]
+
+
+        return data
+
+    def remove_outliers_between_1_99_quantile_method(self):
+        data=self.dataframe
+        E=data['Estradiol (pg/mL)'].astype(float)
+        P=data['Progesterone (pg/mL)'].astype(float)
+        data=data.loc[E.between((E.quantile (0.01)), (E.quantile (0.99)), inclusive=True)]
+        data=data.loc[P.between((P.quantile (0.01)), (P.quantile (0.99)), inclusive=True)]
+
+        return data
+
+
+    def split_data_into_quartiles(self, data):
+        samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
+        types = list(data['Type'].unique())
+        E='Estradiol (pg/mL)'
+        P='Progesterone (pg/mL)'
+        for s in samples:
+            for t in types:
+                
+                data=data.loc[s & (data['Type']==t)]
+                if len(data)>0:
+                    data['Progesterone (pg/mL)_quartiles'] = pd.qcut(data[P], [0, 0.25, 0.5, 0.75, 1], labels=['0-25', '25-50', '50-75', '75-100'])
+                    data['Estradiol (pg/mL)_quartiles'] = pd.qcut(data[E], [0, 0.25, 0.5, 0.75, 1], labels=['0-25', '25-50', '50-75', '75-100'])
+
+        return data
+
+    def scale_and_format_dataframe(self, data):
+        new_data={'Patient ID':[], 'Group':[], 'Subgroup':[], 'Sample':[], 'Type':[],'Time':[], 'Estradiol (pg/mL)':[], 'Progesterone (pg/mL)':[], 'Estradiol (pg/mL)_norm':[], 'Progesterone (pg/mL)_norm':[], 'Estradiol (pg/mL)_quartiles':[], 'Progesterone (pg/mL)_quartiles':[] }
+        samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
+        types = list(data['Type'].unique())
+        
+        for s in samples:
+            for t in types:
+                for i, row in data.iterrows():
+        
+
+    
+                    data=data.loc[s & (data['Type']==t)]
+                    E=data['Estradiol (pg/mL)'].astype(float)
+                    P=data['Progesterone (pg/mL)'].astype(float)
+                    zE = (E[i] - min (E)) / (max (E) - min (E))
+                    zp = (P[i] - min (P)) / (max (P) - min (P))
+
+
+                    new_data['Patient ID'].append(row['Patient ID'])
+                    new_data['Group'].append(row['Group'])
+                    new_data['Subgroup'].append(row['Subgroup'])
+                    new_data['Sample'].append(row['Sample'])
+                    new_data['Type'].append(row['Type'])
+                    new_data['Time'].append(row['Time'])
+                    new_data['Estradiol (pg/mL)'].append(row['Estradiol (pg/mL)'])
+                    new_data['Progesterone (pg/mL)'].append(row['Progesterone (pg/mL)'])
+                    new_data['Estradiol (pg/mL)_norm'].append(zE)
+                    new_data['Progesterone (pg/mL)_norm'].append(zp)
+                    new_data['Progesterone (pg/mL)_quartiles'].append(row['Progesterone (pg/mL)_quartiles'])
+                    new_data['Estradiol (pg/mL)_quartiles'].append(row['Estradiol (pg/mL)_quartiles'])
+
+
+
+        dfnorm = pd.DataFrame(new_data)
+
+        return dfnorm
+
+    def variables_to_numeric(self, data):
+        data.loc[data['Subgroup']=='HIGH RESPONSE', 'Subgroup_numeric']=3
+        data.loc[data['Subgroup']=='LOW RESPONSE', 'Subgroup_numeric']=1
+        data.loc[data['Subgroup']=='AVERAGE RESPONSE', 'Subgroup_numeric']=2
+        data.loc[data['Subgroup']=='TRANSFER', 'Subgroup_numeric']=4
+        data.loc[data['Sample'].str.contains('1'), 'Round']=1
+        data.loc[data['Sample'].str.contains('2'), 'Round']=2
+        data.loc[data['Sample'].str.contains('3'), 'Round']=3
+        data.loc[data['Sample'].str.contains('T'), 'Round']=4
+        data['Estradiol (pg/mL)_norm'].replace(0.0, np.nan)
+        data['Progesterone (pg/mL)_norm'].replace(0.0, np.nan)
+        data.loc[data['Sample'].str.contains('F'), 'Sample_1=SF_1.5=SC_2=BC']=1
+        data.loc[data['Sample'].str.contains('C')& (data['Type']=='Saliva'), 'Sample_1=SF_1.5=SC_2=BC']=1.5
+        data.loc[data['Sample'].str.contains('C')& (data['Type']=='Blood'), 'Sample_1=SF_1.5=SC_2=BC']=2
+
+        return data
+
+    def adjust_string_variables(self, data):
+        data.loc[data['Sample'].str.contains('F'), 'SampleType']='Saliva Fasting'
+        data.loc[data['Sample'].str.contains('C')& (data['Type']=='Saliva'), 'SampleType']='Saliva Clinic'
+        data.loc[data['Sample'].str.contains('C')& (data['Type']=='Blood'), 'SampleType']='Blood Clinic'
+
+        return data
+
+    def binarize_time_variable(self, data):
+        data['Time'].astype(str)
+        data['TimeH']=data['Time'].str.split(':').str[0]
+        data.TimeH.astype(float)
+        samples = ['1', '2', '3']
+        patients = list(data.loc[data['Group']=='A', 'Patient ID'].unique())
+
+        #patients = patients.astype(int)
+        #print(data.loc[data['Patient ID']==2.0])
+        for s in samples:
+            for p in patients:
+                #print(s, p)
+                if len(data.loc[(data['Type']=='Blood') & (data['Sample'].str.contains(s)) & (data['Patient ID']==p)])==0:
+                    continue
+                else:
+                    data.loc[(data['Patient ID']==p) & (data['Sample'].str.contains(s)), 'Time_clinic']=data.loc[(data['Type']=='Blood') & (data['Sample'].str.contains(s)) & (data['Patient ID']==p), 'TimeH'].values[0]
+
+        data.loc[data['Time_clinic'].astype(int)<12, 'Time_of_Day']='<1200'
+        data.loc[(data['Time_clinic'].astype(int)>=12) & (data['Time_clinic'].astype(int)<16), 'Time_of_Day']='>1200|<1600'
+        data.loc[data['Time_clinic'].astype(int)>=16, 'Time_of_Day']='>1600'
+        data.Time_of_Day.replace(to_replace=['<1200', '>1200|<1600', '>1600'], value=['Morning', 'Afternoon', 'Evening'], inplace=True)
+        return data
+
+    
+    def transpose_data_for_correlation(self, data):
+        ids = list(data['Patient ID'].unique())
+        rounds = list(data['Round'].unique())
+
+        newdata={'ID':[], 'Round':[], 'Time_clinic':[], 'Subgroup':[], 'Subgroup_numeric':[], 'Time_of_Day':[], 'SF_Estradiol (pg/mL)_norm':[], 'SC_Estradiol (pg/mL)_norm':[], 'BC_Estradiol (pg/mL)_norm':[], 'SF_Progesterone (pg/mL)_norm':[], 'SC_Progesterone (pg/mL)_norm':[], 'BC_Progesterone (pg/mL)_norm':[],
+        'SF_Estradiol (pg/mL)':[], 'SC_Estradiol (pg/mL)':[], 'BC_Estradiol (pg/mL)':[], 'SF_Progesterone (pg/mL)':[], 'SC_Progesterone (pg/mL)':[], 'BC_Progesterone (pg/mL)':[], 
+        'SF_Estradiol (pg/mL)_quartiles':[], 'SC_Estradiol (pg/mL)_quartiles':[], 'BC_Estradiol (pg/mL)_quartiles':[], 'SF_Progesterone (pg/mL)_quartiles':[], 'SC_Progesterone (pg/mL)_quartiles':[], 'BC_Progesterone (pg/mL)_quartiles':[]}
+
+        for i in ids:
+            for r in rounds:
+                newdata['ID'].append(i)
+                newdata['Round'].append(r)
+
+                #print(i,r, data.loc[(data['Patient ID']==i) & (data['Round']==r), 'Time_clinic'].values[0])
+                if len (data.loc[(data['Patient ID']==i) & (data['Round']==r), 'Time_clinic'].values)==0:
+                    newdata['Time_clinic'].append(np.nan)
+                    newdata['Time_of_Day'].append(np.nan)
+                else:
+                    newdata['Time_clinic'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r), 'Time_clinic'].values[0])
+                    newdata['Time_of_Day'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r), 'Time_of_Day'].values[0])
+                if len (data.loc[(data['Patient ID']==i) & (data['Round']==r), 'Subgroup'].values)==0:
+                    newdata['Subgroup'].append(np.nan)
+                    newdata['Subgroup_numeric'].append(np.nan)
+                else:
+                    newdata['Subgroup'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r), 'Subgroup'].values[0])
+                    newdata['Subgroup_numeric'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r), 'Subgroup_numeric'].values[0])
+                #print(len(data.loc[(data['Patient ID']==i) & (data['Round']==r)]))
+                if len(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Fasting')])==0:
+                    #print('no fasting data')
+                    newdata['SF_Estradiol (pg/mL)_norm'].append(np.nan)
+                    newdata['SF_Progesterone (pg/mL)_norm'].append(np.nan)
+                    newdata['SF_Estradiol (pg/mL)'].append(np.nan)
+                    newdata['SF_Progesterone (pg/mL)'].append(np.nan)
+                    newdata['SF_Estradiol (pg/mL)_quartiles'].append(np.nan)
+                    newdata['SF_Progesterone (pg/mL)_quartiles'].append(np.nan)
+                else:
+                    newdata['SF_Estradiol (pg/mL)_norm'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Fasting'), 'Estradiol (pg/mL)_norm'].values[0])
+                    newdata['SF_Progesterone (pg/mL)_norm'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Fasting'), 'Progesterone (pg/mL)_norm'].values[0])
+                    newdata['SF_Estradiol (pg/mL)'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Fasting'), 'Estradiol (pg/mL)'].values[0])
+                    newdata['SF_Progesterone (pg/mL)'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Fasting'), 'Progesterone (pg/mL)'].values[0])
+                    newdata['SF_Estradiol (pg/mL)_quartiles'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Fasting'), 'Estradiol (pg/mL)_quartiles'].values[0])
+                    newdata['SF_Progesterone (pg/mL)_quartiles'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Fasting'), 'Progesterone (pg/mL)_quartiles'].values[0])
+                if len(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Clinic')])==0:
+                    #print('no clinic data')
+                    newdata['SC_Estradiol (pg/mL)_norm'].append(np.nan)
+                    newdata['SC_Progesterone (pg/mL)_norm'].append(np.nan)
+                    newdata['SC_Estradiol (pg/mL)'].append(np.nan)
+                    newdata['SC_Progesterone (pg/mL)'].append(np.nan)
+                    newdata['SC_Estradiol (pg/mL)_quartiles'].append(np.nan)
+                    newdata['SC_Progesterone (pg/mL)_quartiles'].append(np.nan)
+                else:
+                    newdata['SC_Estradiol (pg/mL)_norm'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Clinic'), 'Estradiol (pg/mL)_norm'].values[0])
+                    newdata['SC_Progesterone (pg/mL)_norm'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Clinic'), 'Progesterone (pg/mL)_norm'].values[0])
+                    newdata['SC_Estradiol (pg/mL)'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Clinic'), 'Estradiol (pg/mL)'].values[0])
+                    newdata['SC_Progesterone (pg/mL)'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Clinic'), 'Progesterone (pg/mL)'].values[0])
+                    newdata['SC_Estradiol (pg/mL)_quartiles'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Clinic'), 'Estradiol (pg/mL)_quartiles'].values[0])
+                    newdata['SC_Progesterone (pg/mL)_quartiles'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Saliva Clinic'), 'Progesterone (pg/mL)_quartiles'].values[0])
+                if len(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Blood Clinic')])==0:
+                    #print('no blood clinic data')
+                    newdata['BC_Estradiol (pg/mL)_norm'].append(np.nan)
+                    newdata['BC_Progesterone (pg/mL)_norm'].append(np.nan)
+                    newdata['BC_Estradiol (pg/mL)'].append(np.nan)
+                    newdata['BC_Progesterone (pg/mL)'].append(np.nan)
+                    newdata['BC_Estradiol (pg/mL)_quartiles'].append(np.nan)
+                    newdata['BC_Progesterone (pg/mL)_quartiles'].append(np.nan)
+
+
+                else:
+                    newdata['BC_Estradiol (pg/mL)_norm'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Blood Clinic'), 'Estradiol (pg/mL)_norm'].values[0])
+                    newdata['BC_Progesterone (pg/mL)_norm'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Blood Clinic'), 'Progesterone (pg/mL)_norm'].values[0])
+                    newdata['BC_Estradiol (pg/mL)'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Blood Clinic'), 'Estradiol (pg/mL)'].values[0])
+                    newdata['BC_Progesterone (pg/mL)'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Blood Clinic'), 'Progesterone (pg/mL)'].values[0])
+                    newdata['BC_Estradiol (pg/mL)_quartiles'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Blood Clinic'), 'Estradiol (pg/mL)_quartiles'].values[0])
+                    newdata['BC_Progesterone (pg/mL)_quartiles'].append(data.loc[(data['Patient ID']==i) & (data['Round']==r) & (data['SampleType']=='Blood Clinic'), 'Progesterone (pg/mL)_quartiles'].values[0])
+                
+                
+        data=pd.DataFrame(newdata)
+        return data
+
+class data_analysis():
+    def __init__(self, dataframe):
+        self.dataframe = dataframe
+    # transposed data for correlation:
+    # lmplot, least squares regression, pearson r2, pairgrid, correlation matrices, joint distribution and regression plots, bland altman plot
+
+    # regression y prediction, alpha, beta, residual error, mean squared error, y predicted, thresholding, trigger decision classification, acc, spec, sens
+
+    # quartile analysis
+
+    #original dataframe:
+
+    # violin plots
+
+
+
+init_data = initial_data_handling('data/data.csv')
+
+barcode_split_dataframe = init_data.get_sample_data_from_barcode()
+# Returns new dataframe that has been modified by the funciton.
+
+# init_data.barcode_split_dataframe
+# Hurray! We can now access the dataframe that has been split by barcode.
+# But we've made a varibale - barcode_split_dataframe - which does the same thing
+
+
+variable_information = init_data.get_variable_information(barcode_split_dataframe)
+
+progesterone_scaled_to_pg_dataframe = init_data.scale_progesterone_to_pg(variable_information)
+
+init_data = data_cleaning(progesterone_scaled_to_pg_dataframe)
+
+# choose an outlier removal method :
+outliers_removed = init_data.remove_outliers_3std_method()
+
+#outliers_removed = init_data.remove_outliers_between_1_99_quantile_method()
+
+quartile_split_dataframe = init_data.split_data_into_quartiles(outliers_removed)
+
+scaled_reformatted_data = init_data.scale_and_format_dataframe(quartile_split_dataframe)
+
+numeric_variable_dataframe = init_data.variables_to_numeric(scaled_reformatted_data)
+
+string_adjusted_dataframe = init_data.adjust_string_variables(numeric_variable_dataframe)
+
+handled_dataframe_for_plotting = init_data.binarize_time_variable(string_adjusted_dataframe)
+
+
+transposed_dataframe_for_correlation_and_regression = init_data.transpose_data_for_correlation(handled_dataframe_for_plotting)
+
+init_data=data_analysis(transposed_dataframe_for_correlation_and_regression)
+
+
+
+
+
