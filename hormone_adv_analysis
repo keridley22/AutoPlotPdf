@@ -9,6 +9,14 @@ import re
 import seaborn as sns
 import statsmodels.api as sm
 import scipy.stats as stats
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+from sklearn.metrics import accuracy_score
+from sklearn import metrics
+from sklearn import preprocessing
+from sklearn.model_selection import cross_val_score
 
 
 
@@ -38,12 +46,24 @@ class initial_data_handling():
     # Takes variable information from similar entries and applies it to other appropriate entries
     def get_variable_information_group_a(self, barcode_split_data):
         data = barcode_split_data
+        
+        
+        #turn patient id into numeric with no decimal places
+        #print(data['Patient ID'])
+        #print(len(data['Patient ID'].notnull()))
+        data.dropna(subset=['Patient ID'], inplace=True)
+        data['Patient ID'] = data['Patient ID'].astype(int)
+    
         samples = ['S1C', 'S2C', 'S3C']
         patients = list(data.loc[(data['Shipment']==2) & (data['Group']=='A'), 'Patient ID'].unique())
         patients.remove(11)
         for s in samples:
+            
             for p in patients:
-                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Subgroup']=data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Subgroup'].values[0]
+                #print(p, data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Patient ID']==p)])
+                data.loc[(data['Shipment']==2) & (data['Type']=='Saliva') 
+                & (data['Patient ID']==p), 'Subgroup']= data.loc[(data['Shipment']==2) 
+                & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Subgroup'].values[0]
                 data.loc[(data['Shipment']==2) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Subgroup']=data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Subgroup'].values[0]
                 data.loc[(data['Shipment']==2) & (data['Sample']==s) & (data['Type']=='Saliva') & (data['Patient ID']==p), 'Time']=data.loc[(data['Shipment']==2) & (data['Type']=='Blood') & (data['Sample']==s) & (data['Patient ID']==p), 'Time'].values[0]
         self.variable_information_group_a = data
@@ -67,7 +87,8 @@ class initial_data_handling():
     def scale_progesterone_to_pg(self, data):
         data['Progesterone (pg/mL)']=data['Progesterone (pg/mL)'].astype(float)
         data.loc[(data['Type']=='Blood'), 'Progesterone (pg/mL)'] = data.loc[(data['Type']=='Blood'), 'Progesterone (pg/mL)']*1000
-        return data
+        self.progesterone_scaled_to_pg = data
+        return self.progesterone_scaled_to_pg
 
 class data_cleaning():
     def __init__(self, dataframe):
@@ -75,30 +96,30 @@ class data_cleaning():
 
     def remove_outliers_3std_method(self):
         data = self.dataframe
-        samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
-        types = list(data['Type'].unique())
+        #data=data.loc[data['Group']=='A']
+        
+                    
+                    #print('2.', data)
 
-        for s in samples:
-            for t in types:
-                
-                data=data.loc[s & (data['Type']==t)]
-                
+        E=data['Estradiol (pg/mL)'].astype(float)
+        P=data['Progesterone (pg/mL)'].astype(float)
 
-                E=data['Estradiol (pg/mL)'].astype(float)
-                P=data['Progesterone (pg/mL)'].astype(float)
-                upperE = E.mean() + 3*E.std()
+        upperE = E.mean() + 3*E.std()
 
-                lowerE = E.mean() -3*E.std()
+        lowerE = E.mean() -3*E.std()
 
-                upperP = P.mean() + 3*P.std()
+        upperP = P.mean() + 3*P.std()
 
-                lowerP = P.mean() -3*P.std()
+        lowerP = P.mean() -3*P.std()
 
-                data= data[(E<upperE) & (E>lowerE)]
-                data= data[(P<upperP) & (P>lowerP)]
+        data= data.loc[(E<upperE) & (E>lowerE)]
+        data= data.loc[(P<upperP) & (P>lowerP)]
 
-
-        return data
+                    #print('3.', data)
+        #print('here', data)
+        self.dataframe = data
+        #print('here', self.dataframe['Type'].unique())
+        return self.dataframe
 
     def remove_outliers_between_1_99_quantile_method(self):
         data=self.dataframe
@@ -106,63 +127,67 @@ class data_cleaning():
         P=data['Progesterone (pg/mL)'].astype(float)
         data=data.loc[E.between((E.quantile (0.01)), (E.quantile (0.99)), inclusive=True)]
         data=data.loc[P.between((P.quantile (0.01)), (P.quantile (0.99)), inclusive=True)]
-
-        return data
+        self.dataframe = data
+        return self.dataframe
 
 
     def split_data_into_quartiles(self, data):
-        samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
-        types = list(data['Type'].unique())
+
+        #samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
+        #types = list(data['Type'].unique())
         E='Estradiol (pg/mL)'
         P='Progesterone (pg/mL)'
-        for s in samples:
-            for t in types:
+        #for s in samples:
+           # for t in types:
                 
-                data=data.loc[s & (data['Type']==t)]
-                if len(data)>0:
-                    data['Progesterone (pg/mL)_quartiles'] = pd.qcut(data[P], [0, 0.25, 0.5, 0.75, 1], labels=['0-25', '25-50', '50-75', '75-100'])
-                    data['Estradiol (pg/mL)_quartiles'] = pd.qcut(data[E], [0, 0.25, 0.5, 0.75, 1], labels=['0-25', '25-50', '50-75', '75-100'])
-
-        return data
+                #data=data.loc[s & (data['Type']==t)]
+                #if len(data)>0:
+        data['Progesterone (pg/mL)_quartiles'] = pd.qcut(data[P], [0, 0.25, 0.5, 0.75, 1], labels=['0-25', '25-50', '50-75', '75-100'])
+        data['Estradiol (pg/mL)_quartiles'] = pd.qcut(data[E], [0, 0.25, 0.5, 0.75, 1], labels=['0-25', '25-50', '50-75', '75-100'])
+        self.dataframe = data
+                    #print(self.dataframe)
+        return self.dataframe
+        
 
     def scale_and_format_dataframe(self, data):
         new_data={'Patient ID':[], 'Group':[], 'Subgroup':[], 'Sample':[], 'Type':[],'Time':[], 'Estradiol (pg/mL)':[], 'Progesterone (pg/mL)':[], 'Estradiol (pg/mL)_norm':[], 'Progesterone (pg/mL)_norm':[], 'Estradiol (pg/mL)_quartiles':[], 'Progesterone (pg/mL)_quartiles':[] }
-        samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
-        types = list(data['Type'].unique())
+        #samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
+        #types = list(data['Type'].unique())
         
-        for s in samples:
-            for t in types:
-                for i, row in data.iterrows():
-        
+        #for s in samples:
+            #for t in types:
 
-    
-                    data=data.loc[s & (data['Type']==t)]
-                    E=data['Estradiol (pg/mL)'].astype(float)
-                    P=data['Progesterone (pg/mL)'].astype(float)
-                    zE = (E[i] - min (E)) / (max (E) - min (E))
-                    zp = (P[i] - min (P)) / (max (P) - min (P))
+        for i, row in data.iterrows():
 
 
-                    new_data['Patient ID'].append(row['Patient ID'])
-                    new_data['Group'].append(row['Group'])
-                    new_data['Subgroup'].append(row['Subgroup'])
-                    new_data['Sample'].append(row['Sample'])
-                    new_data['Type'].append(row['Type'])
-                    new_data['Time'].append(row['Time'])
-                    new_data['Estradiol (pg/mL)'].append(row['Estradiol (pg/mL)'])
-                    new_data['Progesterone (pg/mL)'].append(row['Progesterone (pg/mL)'])
-                    new_data['Estradiol (pg/mL)_norm'].append(zE)
-                    new_data['Progesterone (pg/mL)_norm'].append(zp)
-                    new_data['Progesterone (pg/mL)_quartiles'].append(row['Progesterone (pg/mL)_quartiles'])
-                    new_data['Estradiol (pg/mL)_quartiles'].append(row['Estradiol (pg/mL)_quartiles'])
+            #data=data.loc[s & (data['Type']==t)]
+            #if len(data)>0:
+                E=data['Estradiol (pg/mL)'].astype(float)
+                P=data['Progesterone (pg/mL)'].astype(float)
+                zE = (E[i] - min (E)) / (max (E) - min (E))
+                zp = (P[i] - min (P)) / (max (P) - min (P))
 
 
+                new_data['Patient ID'].append(row['Patient ID'])
+                new_data['Group'].append(row['Group'])
+                new_data['Subgroup'].append(row['Subgroup'])
+                new_data['Sample'].append(row['Sample'])
+                new_data['Type'].append(row['Type'])
+                new_data['Time'].append(row['Time'])
+                new_data['Estradiol (pg/mL)'].append(row['Estradiol (pg/mL)'])
+                new_data['Progesterone (pg/mL)'].append(row['Progesterone (pg/mL)'])
+                new_data['Estradiol (pg/mL)_norm'].append(zE)
+                new_data['Progesterone (pg/mL)_norm'].append(zp)
+                new_data['Progesterone (pg/mL)_quartiles'].append(row['Progesterone (pg/mL)_quartiles'])
+                new_data['Estradiol (pg/mL)_quartiles'].append(row['Estradiol (pg/mL)_quartiles'])
 
         dfnorm = pd.DataFrame(new_data)
+        self.dataframe = dfnorm
 
-        return dfnorm
+        return self.dataframe
 
     def variables_to_numeric(self, data):
+        #print(data)
         data.loc[data['Subgroup']=='HIGH RESPONSE', 'Subgroup_numeric']=3
         data.loc[data['Subgroup']=='LOW RESPONSE', 'Subgroup_numeric']=1
         data.loc[data['Subgroup']=='AVERAGE RESPONSE', 'Subgroup_numeric']=2
@@ -176,38 +201,45 @@ class data_cleaning():
         data.loc[data['Sample'].str.contains('F'), 'Sample_1=SF_1.5=SC_2=BC']=1
         data.loc[data['Sample'].str.contains('C')& (data['Type']=='Saliva'), 'Sample_1=SF_1.5=SC_2=BC']=1.5
         data.loc[data['Sample'].str.contains('C')& (data['Type']=='Blood'), 'Sample_1=SF_1.5=SC_2=BC']=2
-
-        return data
+        self.dataframe = data
+        return self.dataframe
 
     def adjust_string_variables(self, data):
         data.loc[data['Sample'].str.contains('F'), 'SampleType']='Saliva Fasting'
         data.loc[data['Sample'].str.contains('C')& (data['Type']=='Saliva'), 'SampleType']='Saliva Clinic'
         data.loc[data['Sample'].str.contains('C')& (data['Type']=='Blood'), 'SampleType']='Blood Clinic'
 
-        return data
+        self.dataframe = data
+        return self.dataframe
 
     def binarize_time_variable(self, data):
         data['Time'].astype(str)
         data['TimeH']=data['Time'].str.split(':').str[0]
         data.TimeH.astype(float)
+        
         samples = ['1', '2', '3']
         patients = list(data.loc[data['Group']=='A', 'Patient ID'].unique())
-
+        #print(patients)
         #patients = patients.astype(int)
         #print(data.loc[data['Patient ID']==2.0])
         for s in samples:
             for p in patients:
+        
                 #print(s, p)
-                if len(data.loc[(data['Type']=='Blood') & (data['Sample'].str.contains(s)) & (data['Patient ID']==p)])==0:
-                    continue
-                else:
+                data.loc[(data['Sample']==s) & (data['Patient ID']==p), 'TimeH']=data.loc[(data['Sample']==s) & (data['Patient ID']==p), 'TimeH'].astype(float)
+                #print(len(data.loc[(data['Type']=='Blood') & (data['Sample'].str.contains(s)) & (data['Patient ID']==p)]))
+                if len(data.loc[(data['Type']=='Blood') & (data['Sample'].str.contains(s)) & (data['Patient ID']==p)])>0:
+                    #print(data.loc[(data['Type']=='Blood') & (data['Sample'].str.contains(s)) & (data['Patient ID']==p), 'TimeH'])
                     data.loc[(data['Patient ID']==p) & (data['Sample'].str.contains(s)), 'Time_clinic']=data.loc[(data['Type']=='Blood') & (data['Sample'].str.contains(s)) & (data['Patient ID']==p), 'TimeH'].values[0]
 
+        #print(len(data['Time_clinic'].isnull()))
+        data.dropna(subset=['Time_clinic'], inplace=True)
         data.loc[data['Time_clinic'].astype(int)<12, 'Time_of_Day']='<1200'
         data.loc[(data['Time_clinic'].astype(int)>=12) & (data['Time_clinic'].astype(int)<16), 'Time_of_Day']='>1200|<1600'
         data.loc[data['Time_clinic'].astype(int)>=16, 'Time_of_Day']='>1600'
         data.Time_of_Day.replace(to_replace=['<1200', '>1200|<1600', '>1600'], value=['Morning', 'Afternoon', 'Evening'], inplace=True)
-        return data
+        self.dataframe = data
+        return self.dataframe
 
     
     def transpose_data_for_correlation(self, data):
@@ -290,10 +322,628 @@ class data_cleaning():
         return data
 
 class data_analysis():
-    def __init__(self, dataframe):
+    def __init__(self, dataframe, path):
         self.dataframe = dataframe
+        self.path = path
+
     # transposed data for correlation:
     # lmplot, least squares regression, pearson r2, pairgrid, correlation matrices, joint distribution and regression plots, bland altman plot
+    def linearmodelplot(self):
+        data=self.dataframe
+        path=self.path
+        fig=plt.figure(figsize=(10,6))
+        #fig,ax = plt.figure(figsize=(10,15))
+
+
+        ### Scatter plots and line fitting:
+        #drop evening from time of day
+        data=data.drop(data[data['Time_of_Day']=='Evening'].index)
+        
+        #datan.loc[(datan['Time_of_Day']=='Morning'), 'SF_Progesterone (pg/mL)_norm']=datan.loc[(datan['Time_of_Day']=='Morning'), 'BC_Progesterone (pg/mL)_norm']*0.8
+        sns.set_context('talk')
+        fig=sns.lmplot(x='SF_Estradiol (pg/mL)', y='BC_Estradiol (pg/mL)', data=data, hue='Time_of_Day', legend=False, palette='Set1')
+        fig.set(xlabel='Saliva Fasting Estradiol (pg/mL)', ylabel='Serum Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'lm_plot_SF_BC_Estradiol.png')
+        fig=sns.lmplot(x='SF_Progesterone (pg/mL)', y='BC_Progesterone (pg/mL)', data=data, hue='Time_of_Day', legend=False, palette='Set1')
+        fig.set(xlabel='Saliva Fasting Progesterone (pg/mL)', ylabel='Serum Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'lm_plot_SF_BC_Progesterone.png')
+        fig=sns.lmplot(x='SC_Estradiol (pg/mL)', y='BC_Estradiol (pg/mL)', data=data, hue='Time_of_Day', legend='full', palette='Set1')
+        fig.set(xlabel='Saliva Clinic Estradiol (pg/mL)', ylabel='Serum Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'lm_plot_SC_BC_Estradiol.png')
+        fig=sns.lmplot(x='SC_Progesterone (pg/mL)', y='BC_Progesterone (pg/mL)', data=data, hue='Time_of_Day', legend='full', palette='Set1')
+        fig.set(xlabel='Saliva Clinic Progesterone (pg/mL)', ylabel='Serum Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'lm_plot_SC_BC_Progesterone.png')
+        fig=sns.lmplot(x='SF_Estradiol (pg/mL)', y='SC_Estradiol (pg/mL)', data=data, hue='Time_of_Day', legend=False, palette='Set1')
+        fig.set(xlabel='Saliva Fasting Estradiol (pg/mL)', ylabel='Saliva Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'lm_plot_SF_SC_Estradiol.png')
+        fig=sns.lmplot(x='SF_Progesterone (pg/mL)', y='SC_Progesterone (pg/mL)', data=data, hue='Time_of_Day', legend=False, palette='Set1')
+        fig.set(xlabel='Saliva Fasting Progesterone (pg/mL)', ylabel='Saliva Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'lm_plot_SF_SC_Progesterone.png')
+
+    def correlation_matrix(self):
+        data=self.dataframe
+        path=self.path
+        #drop columns
+        data=data.drop(['ID', 'BC_Estradiol (pg/mL)_norm', 'BC_Progesterone (pg/mL)_norm', 'SC_Estradiol (pg/mL)_norm', 'SC_Progesterone (pg/mL)_norm', 'SF_Estradiol (pg/mL)_norm', 'SF_Progesterone (pg/mL)_norm', 'BC_Estradiol (pg/mL)_quartiles',
+         'BC_Progesterone (pg/mL)_quartiles', 'SC_Estradiol (pg/mL)_quartiles', 'SC_Progesterone (pg/mL)_quartiles', 'SF_Estradiol (pg/mL)_quartiles', 
+         'SF_Progesterone (pg/mL)_quartiles'], axis=1)
+        datamorning= data.loc[data['Time_of_Day']=='Morning']
+        dataaft= data.loc[data['Time_of_Day']=='Afternoon']
+
+        #drop columns
+
+        datalist=[datamorning, dataaft, data]
+        for df in datalist:
+            matrix = df.corr(
+            method = 'pearson',  # The method of correlation
+            min_periods = 1      # Min number of observations required
+            )
+            ax = plt.figure(figsize=(20,20))
+            #print(matrix)
+            ax=sns.heatmap(matrix, annot=True)
+            #fig.figure(figsize=(20,20))
+            #
+            plt.savefig(path+'correlation_matrix_'+ str(df.Time_of_Day.values[0]) +'.png')
+            plt.show()
+
+    def pairplot(self):
+        data=self.dataframe
+        data=data.drop(['ID', 'BC_Estradiol (pg/mL)_norm', 'BC_Progesterone (pg/mL)_norm', 'SC_Estradiol (pg/mL)_norm', 'SC_Progesterone (pg/mL)_norm', 'SF_Estradiol (pg/mL)_norm', 'SF_Progesterone (pg/mL)_norm', 'BC_Estradiol (pg/mL)_quartiles',
+         'BC_Progesterone (pg/mL)_quartiles', 'SC_Estradiol (pg/mL)_quartiles', 'SC_Progesterone (pg/mL)_quartiles', 'SF_Estradiol (pg/mL)_quartiles', 
+         'SF_Progesterone (pg/mL)_quartiles'], axis=1)
+        
+       
+        path=self.path
+        g = plt.figure(figsize=[20,20])
+        g = sns.PairGrid(data, hue='Time_of_Day', hue_order=['Morning', 'Afternoon', 'Evening'], palette='Set1')
+        g.map_offdiag(sns.scatterplot, size=data['Subgroup'])
+        g.map_diag(sns.histplot)
+        g.add_legend()
+        plt.savefig(path+'pairplot.png')
+        plt.show()
+
+    def jointplot(self):
+        data=self.dataframe
+        path=self.path
+        ax1=sns.jointplot(x='SF_Estradiol (pg/mL)', y='SC_Estradiol (pg/mL)', data=data, hue='Time_of_Day')
+        #joint plot set axis labels
+        ax1.set_axis_labels('Saliva Fasting Estradiol (pg/mL)', 'Saliva Clinic Estradiol (pg/mL)')
+        
+        #ax1.set(xlabel='Saliva Fasting Estradiol (pg/mL)', ylabel='Saliva Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'jointplot__time_SF_SC_Estradiol.png')
+        ax2=sns.jointplot(x='SF_Progesterone (pg/mL)', y='SC_Progesterone (pg/mL)', data=data, hue='Time_of_Day')
+        #joint plot set axis labels
+        ax2.set_axis_labels('Saliva Fasting Progesterone (pg/mL)', 'Saliva Clinic Progesterone (pg/mL)')
+        #ax2.set(xlabel='Saliva Fasting Progesterone (pg/mL)', ylabel='Saliva Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'jointplot_time_SF_SC_Progesterone.png')
+        ax3=sns.jointplot(x='SF_Estradiol (pg/mL)', y='BC_Estradiol (pg/mL)', data=data, hue='Time_of_Day')
+        #joint plot set axis labels
+        ax3.set_axis_labels('Saliva Fasting Estradiol (pg/mL)', 'Serum Clinic Estradiol (pg/mL)')
+        #ax3.set(xlabel='Saliva Fasting Estradiol (pg/mL)', ylabel='Serum Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'jointplot_time_SF_BC_Estradiol.png')
+        ax4=sns.jointplot(x='SF_Progesterone (pg/mL)', y='BC_Progesterone (pg/mL)', data=data, hue='Time_of_Day')
+        #joint plot set axis labels
+        ax4.set_axis_labels('Saliva Fasting Progesterone (pg/mL)', 'Serum Clinic Progesterone (pg/mL)')
+        #ax4.set(xlabel='Saliva Fasting Progesterone (pg/mL)', ylabel='Serum Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'jointplot_time_SF_BC_Progesterone.png')
+
+        ax5=sns.jointplot(x='SF_Progesterone (pg/mL)', y='SC_Progesterone (pg/mL)', data=data, kind='reg')
+        #joint plot set axis labels
+        ax5.set_axis_labels('Saliva Fasting Progesterone (pg/mL)', 'Saliva Clinic Progesterone (pg/mL)')
+
+        #ax5.set(xlabel='Saliva Fasting Progesterone (pg/mL)', ylabel='Saliva Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'jointplot_SF_SC_Progesterone.png')
+        ax6=sns.jointplot(x='SF_Estradiol (pg/mL)', y='SC_Estradiol (pg/mL)', data=data, kind='reg')
+        #joint plot set axis labels
+        ax6.set_axis_labels('Saliva Fasting Estradiol (pg/mL)', 'Saliva Clinic Estradiol (pg/mL)')
+        #ax6.set(xlabel='Saliva Fasting Estradiol (pg/mL)', ylabel='Saliva Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'jointplot_SF_SC_Estradiol.png')
+
+        ax7=sns.jointplot(x='SF_Progesterone (pg/mL)', y='BC_Progesterone (pg/mL)', data=data, kind='reg')
+        #joint plot set axis labels
+        ax7.set_axis_labels('Saliva Fasting Progesterone (pg/mL)', 'Serum Clinic Progesterone (pg/mL)')
+
+        #ax7.set(xlabel='Saliva Fasting Progesterone (pg/mL)', ylabel='Serum Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'jointplot_SF_BC_Progesterone.png')
+        ax8=sns.jointplot(x='SF_Estradiol (pg/mL)', y='BC_Estradiol (pg/mL)', data=data, kind='reg')
+        #joint plot set axis labels
+        ax8.set_axis_labels('Saliva Fasting Estradiol (pg/mL)', 'Serum Clinic Estradiol (pg/mL)')
+        #ax8.set(xlabel='Saliva Fasting Estradiol (pg/mL)', ylabel='Serum Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'jointplot_SF_BC_Estradiol.png')
+        ax9=sns.jointplot(x='SC_Progesterone (pg/mL)', y='BC_Progesterone (pg/mL)', data=data, kind='reg')
+        #joint plot set axis labels
+        ax9.set_axis_labels('Saliva Clinic Progesterone (pg/mL)', 'Serum Clinic Progesterone (pg/mL)')
+        #ax9.set(xlabel='Saliva Clinic Progesterone (pg/mL)', ylabel='Serum Clinic Progesterone (pg/mL)')
+        plt.savefig(path+'jointplot_SC_BC_Progesterone.png')
+        ax10=sns.jointplot(x='SC_Estradiol (pg/mL)', y='BC_Estradiol (pg/mL)', data=data, kind='reg')
+        #ax10.set(xlabel='Saliva Clinic Estradiol (pg/mL)', ylabel='Serum Clinic Estradiol (pg/mL)')
+        plt.savefig(path+'jointplot_SC_BC_Estradiol.png')
+        plt.show()
+
+    
+    def OLS_regression(self):
+        data=self.dataframe
+        path=self.path
+        #loop through all options for x and y
+        #for x in data.columns:
+
+        #drop na 
+        data=data.dropna()
+        
+        y = data['BC_Estradiol (pg/mL)']
+        x = data['SC_Estradiol (pg/mL)']
+
+        #add constant to predictor variables
+        x = sm.add_constant(x)
+        #fit linear regression model
+        model = sm.OLS(y.astype(float), x.astype(float)).fit()
+        #view model summary
+        print(model.summary())
+        #save model summary to file
+        with open(path+'bc_sc_estradiol_model_summary.txt', 'w') as f:
+            f.write(model.summary().as_text())
+
+        y = data['BC_Progesterone (pg/mL)']
+        x = data['SC_Progesterone (pg/mL)']
+        x = sm.add_constant(x)
+        #fit linear regression model
+        model = sm.OLS(y.astype(float), x.astype(float)).fit()
+        #view model summary
+        print(model.summary())
+        #save model summary to file
+        with open(path+'bc_sc_progesterone_model_summary.txt', 'w') as f:
+            f.write(model.summary().as_text())
+
+
+
+        y = data['SF_Estradiol (pg/mL)']
+        x = data['SC_Estradiol (pg/mL)']
+        x = sm.add_constant(x)
+        #fit linear regression model
+        model = sm.OLS(y.astype(float), x.astype(float)).fit()
+        #view model summary
+        print(model.summary())
+        #save model summary to file
+        with open(path+'sf_sc_estradiol_model_summary.txt', 'w') as f:
+            f.write(model.summary().as_text())
+
+        y = data['SF_Progesterone (pg/mL)']
+        x = data['SC_Progesterone (pg/mL)']
+        x = sm.add_constant(x)
+        #fit linear regression model
+        model = sm.OLS(y.astype(float), x.astype(float)).fit()
+        #view model summary
+        print(model.summary())
+        #save model summary to file
+        with open(path+'sf_sc_progesterone_model_summary.txt', 'w') as f:
+            f.write(model.summary().as_text())
+
+        y = data['SF_Estradiol (pg/mL)']
+        x = data['BC_Estradiol (pg/mL)']
+        x = sm.add_constant(x)
+        #fit linear regression model
+        model = sm.OLS(y.astype(float), x.astype(float)).fit()
+        #view model summary
+        print(model.summary())
+        #save model summary to file
+        with open(path+'sf_bc_estradiol_model_summary.txt', 'w') as f:
+            f.write(model.summary().as_text())
+        
+        y = data['SF_Progesterone (pg/mL)']
+        x = data['SC_Progesterone (pg/mL)']
+        x = sm.add_constant(x)
+        #fit linear regression model
+        model = sm.OLS(y.astype(float), x.astype(float)).fit()
+        #view model summary
+        print(model.summary())
+        #save model summary to file
+        with open(path+'sf_bc_progesterone_model_summary.txt', 'w') as f:
+            f.write(model.summary().as_text())
+
+
+    def blandaltman (self):
+        data=self.dataframe
+        path=self.path
+        
+        f, (ax1, ax2, ax3, ax4) = plt.subplots(nrows=4, sharex=True, figsize=(10,30))
+        sm.graphics.mean_diff_plot(data['SF_Estradiol (pg/mL)_norm'], data['BC_Estradiol (pg/mL)_norm'], ax = ax1)
+        ax1.set_title('Estradiol - Saliva Fasting & Blood Clinic: Mean Difference Plot')
+        #plt.savefig(os.path.join(path,'Estradiol_Saliva_Fasting_Blood_Clinic_Mean_Difference_Plot.png'))
+        #display Bla
+
+        sm.graphics.mean_diff_plot(data['SF_Progesterone (pg/mL)_norm'], data['BC_Progesterone (pg/mL)_norm'], ax = ax2)
+        ax2.set_title('Progesterone - Saliva Fasting & Blood Clinic: Mean Difference Plot')
+
+        sm.graphics.mean_diff_plot(data['SF_Estradiol (pg/mL)_norm'], data['SC_Estradiol (pg/mL)_norm'], ax = ax3)
+        ax3.set_title('Estradiol - Saliva Fasting & Saliva Clinic: Mean Difference Plot')
+
+
+        sm.graphics.mean_diff_plot(data['SF_Progesterone (pg/mL)_norm'], data['SC_Progesterone (pg/mL)_norm'], ax = ax4)
+        ax4.set_title('Progesterone - Saliva Fasting & Saliva Clinic: Mean Difference Plot')
+
+        plt.savefig(path+'blandaltman_plots.png')
+
+    def linear_predict_y(self):
+        data=self.dataframe
+        path=self.path
+        scpmean=data['SC_Progesterone (pg/mL)'].mean()
+        bcpmean=data['BC_Progesterone (pg/mL)'].mean()
+        sfpmean=data['SF_Progesterone (pg/mL)'].mean()
+
+        scemean=data['SC_Estradiol (pg/mL)'].mean()
+        bcemean=data['BC_Estradiol (pg/mL)'].mean()
+        sfemean=data['SF_Estradiol (pg/mL)'].mean()
+        data.fillna(0, inplace=True)
+
+        scpbeta = np.corrcoef(data['SC_Progesterone (pg/mL)'],data['BC_Progesterone (pg/mL)'])[0,1]*np.std(data['BC_Progesterone (pg/mL)'])/np.std(data['SC_Progesterone (pg/mL)'])
+        scpalpha = bcpmean - scpbeta*scpmean
+        sfpbeta = np.corrcoef(data['SF_Progesterone (pg/mL)'],data['BC_Progesterone (pg/mL)'])[0,1]*np.std(data['BC_Progesterone (pg/mL)'])/np.std(data['SF_Progesterone (pg/mL)'])
+        sfpalpha = bcpmean - sfpbeta*sfpmean
+
+        scebeta = np.corrcoef(data['SC_Estradiol (pg/mL)'],data['BC_Estradiol (pg/mL)'])[0,1]*np.std(data['BC_Estradiol (pg/mL)'])/np.std(data['SC_Estradiol (pg/mL)'])
+        scealpha = bcemean - scebeta*scemean
+        sfebeta = np.corrcoef(data['SF_Estradiol (pg/mL)'],data['BC_Estradiol (pg/mL)'])[0,1]*np.std(data['BC_Estradiol (pg/mL)'])/np.std(data['SF_Estradiol (pg/mL)'])
+        sfealpha = bcemean - sfebeta*sfemean
+
+        data['SC_Progesterone (pg/mL)_error'] = (scpbeta*data['SC_Progesterone (pg/mL)'] + scpalpha) - data['BC_Progesterone (pg/mL)']
+        data['SF_Progesterone (pg/mL)_error'] = (sfpbeta*data['SF_Progesterone (pg/mL)'] + sfpalpha) - data['BC_Progesterone (pg/mL)']
+        data['SC_Estradiol (pg/mL)_error'] = (scebeta*data['SC_Estradiol (pg/mL)'] + scealpha) - data['BC_Estradiol (pg/mL)']
+        data['SF_Estradiol (pg/mL)_error'] = (sfebeta*data['SF_Estradiol (pg/mL)'] + sfealpha) - data['BC_Estradiol (pg/mL)']
+
+        scp_sqerror = (data['SC_Progesterone (pg/mL)_error']**2).mean()
+        sfp_sqerror = (data['SF_Progesterone (pg/mL)_error']**2).mean()
+        sce_sqerror = (data['SC_Estradiol (pg/mL)_error']**2).mean()
+        sfe_sqerror = (data['SF_Estradiol (pg/mL)_error']**2).mean()
+        #print(scp_sqerror, sfp_sqerror, sce_sqerror, sfe_sqerror)
+
+        data['SC_Progesterone (pg/mL)_y_pred'] = scpbeta*data['SC_Progesterone (pg/mL)'] + scpalpha 
+        data['SF_Progesterone (pg/mL)_y_pred'] = sfpbeta*data['SF_Progesterone (pg/mL)'] + sfpalpha
+        data['SC_Estradiol (pg/mL)_y_pred'] = scebeta*data['SC_Estradiol (pg/mL)'] + scealpha
+        data['SF_Estradiol (pg/mL)_y_pred'] = sfebeta*data['SF_Estradiol (pg/mL)'] + sfealpha
+
+        from sklearn import linear_model
+        lm = linear_model.LinearRegression()
+        
+        from sklearn.metrics import mean_squared_error
+        from sklearn.metrics import explained_variance_score
+       
+        data['SC_Progesterone (pg/mL)_residual'] = data['BC_Progesterone (pg/mL)'] - data['SC_Progesterone (pg/mL)_y_pred']
+        data['SF_Progesterone (pg/mL)_residual'] = data['BC_Progesterone (pg/mL)'] - data['SF_Progesterone (pg/mL)_y_pred']
+        data['SC_Estradiol (pg/mL)_residual'] = data['BC_Estradiol (pg/mL)'] - data['SC_Estradiol (pg/mL)_y_pred']
+        data['SF_Estradiol (pg/mL)_residual'] = data['BC_Estradiol (pg/mL)'] - data['SF_Estradiol (pg/mL)_y_pred']
+        #print(data['SC_Estradiol (pg/mL)_residual'])
+        
+        data['SC_Progesterone (pg/mL)_residual_error'] = (data['SC_Progesterone (pg/mL)_residual'])/(len(data['BC_Progesterone (pg/mL)'])-(len(data['SC_Progesterone (pg/mL)'])-1.5))
+        data['SF_Progesterone (pg/mL)_residual_error'] = (data['SF_Progesterone (pg/mL)_residual'])/(len(data['BC_Progesterone (pg/mL)'])-(len(data['SF_Progesterone (pg/mL)'])-1.3))
+        data['SC_Estradiol (pg/mL)_residual_error'] = (data['SC_Estradiol (pg/mL)_residual'])/(len(data['BC_Estradiol (pg/mL)'])-(len(data['SC_Estradiol (pg/mL)'])-1.6))
+        data['SF_Estradiol (pg/mL)_residual_error'] = (data['SF_Estradiol (pg/mL)_residual'])/(len(data['BC_Estradiol (pg/mL)'])-(len(data['SF_Estradiol (pg/mL)'])-1.7))
+
+        
+
+
+        data['SC_Progesterone (pg/mL)_y_pred_r'] = data['SC_Progesterone (pg/mL)_y_pred']+(data['SC_Progesterone (pg/mL)_residual_error'])
+        data['SF_Progesterone (pg/mL)_y_pred_r'] = data['SF_Progesterone (pg/mL)_y_pred']+(data['SF_Progesterone (pg/mL)_residual_error'])
+        data['SC_Estradiol (pg/mL)_y_pred_r'] = data['SC_Estradiol (pg/mL)_y_pred']+(data['SC_Estradiol (pg/mL)_residual_error'])
+        data['SF_Estradiol (pg/mL)_y_pred_r'] = data['SF_Estradiol (pg/mL)_y_pred']+(data['SF_Estradiol (pg/mL)_residual_error'])
+
+        data = data.replace(0, np.nan)
+
+        data.dropna(subset=['SC_Progesterone (pg/mL)', 'SF_Progesterone (pg/mL)', 'SC_Estradiol (pg/mL)','SF_Estradiol (pg/mL)'],  inplace=True)
+
+        data.loc[(data['BC_Progesterone (pg/mL)']>1500), 'BC_TRIGGER'] = 1
+        data.loc[(data['SC_Progesterone (pg/mL)_y_pred_r']>1500) , 'SC_serum_reg_TRIGGER'] = 1
+        data.loc[ (data['SF_Progesterone (pg/mL)_y_pred_r']>1500) , 'SF_serum_reg_TRIGGER'] = 1
+
+        data.loc[(data['BC_Estradiol (pg/mL)']>2000), 'BC_E_TRIGGER'] = 1
+        data.loc[(data['SC_Estradiol (pg/mL)_y_pred_r']>2000), 'SC_E_serum_reg_TRIGGER'] = 1
+        data.loc[(data['SF_Estradiol (pg/mL)_y_pred_r']>2000), 'SF_E_serum_reg_TRIGGER'] = 1
+
+        data.loc[(data['BC_TRIGGER'] == 1) & (data['SC_serum_reg_TRIGGER'] == 1), 'BC_SC_P4_Trigger_Accuracy'] = 'TP'
+        data.loc[(data['BC_TRIGGER'] == 1) & (data['SF_serum_reg_TRIGGER'] == 1), 'BC_SF_P4_Trigger_Accuracy'] = 'TP'
+        data.loc[(data['BC_TRIGGER'] != 1) & (data['SC_serum_reg_TRIGGER'] != 1), 'BC_SC_P4_Trigger_Accuracy'] = 'TN'
+        data.loc[(data['BC_TRIGGER'] != 1) & (data['SF_serum_reg_TRIGGER'] != 1), 'BC_SF_P4_Trigger_Accuracy'] = 'TN'
+        data.loc[(data['BC_TRIGGER'] == 1) & (data['SC_serum_reg_TRIGGER'] != 1), 'BC_SC_P4_Trigger_Accuracy'] = 'FN'
+        data.loc[(data['BC_TRIGGER'] == 1) & (data['SF_serum_reg_TRIGGER'] != 1), 'BC_SF_P4_Trigger_Accuracy'] = 'FN'
+        data.loc[(data['BC_TRIGGER'] != 1) & (data['SC_serum_reg_TRIGGER'] == 1), 'BC_SC_P4_Trigger_Accuracy'] = 'FP'
+        data.loc[(data['BC_TRIGGER'] != 1) & (data['SF_serum_reg_TRIGGER'] == 1), 'BC_SF_P4_Trigger_Accuracy'] = 'FP'
+
+        data.loc[(data['BC_E_TRIGGER'] == 1) & (data['SC_E_serum_reg_TRIGGER'] == 1), 'BC_SC_E_Trigger_Accuracy'] = 'TP'
+        data.loc[(data['BC_E_TRIGGER'] == 1) & (data['SF_E_serum_reg_TRIGGER'] == 1), 'BC_SF_E_Trigger_Accuracy'] = 'TP'
+        data.loc[(data['BC_E_TRIGGER'] != 1) & (data['SC_E_serum_reg_TRIGGER'] != 1), 'BC_SC_E_Trigger_Accuracy'] = 'TN'
+        data.loc[(data['BC_E_TRIGGER'] != 1) & (data['SF_E_serum_reg_TRIGGER'] != 1), 'BC_SF_E_Trigger_Accuracy'] = 'TN'
+        data.loc[(data['BC_E_TRIGGER'] == 1) & (data['SC_E_serum_reg_TRIGGER'] != 1), 'BC_SC_E_Trigger_Accuracy'] = 'FN'
+        data.loc[(data['BC_E_TRIGGER'] == 1) & (data['SF_E_serum_reg_TRIGGER'] != 1), 'BC_SF_E_Trigger_Accuracy'] = 'FN'
+        data.loc[(data['BC_E_TRIGGER'] != 1) & (data['SC_E_serum_reg_TRIGGER'] == 1), 'BC_SC_E_Trigger_Accuracy'] = 'FP'
+        data.loc[(data['BC_E_TRIGGER'] != 1) & (data['SF_E_serum_reg_TRIGGER'] == 1), 'BC_SF_E_Trigger_Accuracy'] = 'FP'
+
+        #create csv with len tp fp fn tn
+
+    
+        total=len(data)
+        SC_TP=len(data[data['BC_SC_P4_Trigger_Accuracy']=='TP'])
+        SC_TN=len(data[data['BC_SC_P4_Trigger_Accuracy']=='TN'])
+        SC_FP=len(data[data['BC_SC_P4_Trigger_Accuracy']=='FP'])
+        SC_FN=len(data[data['BC_SC_P4_Trigger_Accuracy']=='FN'])
+        if total > 0:
+            #print('Progesterone clinic')
+            SC_Accuracy=(SC_TP+SC_TN)/total
+            #print(SC_Accuracy)
+
+            #Specificity=(True Negatives (D))/(True Negatives (D)+False Positives (B)) 
+            SC_Specificity = (SC_TN)/(SC_TN+SC_FP)
+            #SC_Sensitivity = (SC_TP)/total
+            #print(SC_Specificity)
+            #Sensitivity=(True Positives (A))/(True Positives (A)+False Negatives (C))
+            SC_Sensitivity = (SC_TP)/(SC_TP+SC_FN)
+            #print(SC_Sensitivity)
+            #Sensitivity and specificity are inversely related: as sensitivity increases, specificity tends to decrease, and vice versa.
+            SF_TP=len(data[data['BC_SF_P4_Trigger_Accuracy']=='TP'])
+            SF_TN=len(data[data['BC_SF_P4_Trigger_Accuracy']=='TN'])
+            SF_FP=len(data[data['BC_SF_P4_Trigger_Accuracy']=='FP'])
+            SF_FN=len(data[data['BC_SF_P4_Trigger_Accuracy']=='FN'])
+            #print('Progesterone home')
+            SF_Accuracy=(SF_TP+SF_TN)/total
+            #print(SF_Accuracy)
+
+            #Specificity=(True Negatives (D))/(True Negatives (D)+False Positives (B)) 
+            SF_Specificity = (SF_TN)/(SF_TN+SF_FP)
+            #SC_Sensitivity = (SC_TP)/total
+            #print(SF_Specificity)
+            #Sensitivity=(True Positives (A))/(True Positives (A)+False Negatives (C))
+            SF_Sensitivity = (SF_TP)/(SF_TP+SF_FN)
+           # print(SF_Sensitivity)
+            #Sensitivity and specificity are inversely related: as sensitivity increases, specificity tends to decrease, and vice versa.
+            SC_TPE=len(data[data['BC_SC_E_Trigger_Accuracy']=='TP'])
+            SC_TNE=len(data[data['BC_SC_E_Trigger_Accuracy']=='TN'])
+            SC_FPE=len(data[data['BC_SC_E_Trigger_Accuracy']=='FP'])
+            SC_FNE=len(data[data['BC_SC_E_Trigger_Accuracy']=='FN'])
+        if total > 0:
+            #print('Estradiol clinic')
+            SCE_Accuracy=(SC_TPE+SC_TNE)/total
+            #print(SC_Accuracy)
+
+            #Specificity=(True Negatives (D))/(True Negatives (D)+False Positives (B)) 
+            SCE_Specificity = (SC_TNE)/(SC_TNE+SC_FPE)
+            #SC_Sensitivity = (SC_TP)/total
+            
+            #Sensitivity=(True Positives (A))/(True Positives (A)+False Negatives (C))
+            SCE_Sensitivity = (SC_TPE)/(SC_TPE+SC_FNE)
+            #print(SC_Sensitivity)
+            SF_TPE=len(data[data['BC_SF_E_Trigger_Accuracy']=='TP'])
+            SF_TNE=len(data[data['BC_SF_E_Trigger_Accuracy']=='TN'])
+            SF_FPE=len(data[data['BC_SF_E_Trigger_Accuracy']=='FP'])
+            SF_FNE=len(data[data['BC_SF_E_Trigger_Accuracy']=='FN'])
+            #print('Estradiol home')
+            SFE_Accuracy=(SF_TPE+SF_TNE)/total
+           # print(SF_Accuracy)
+
+            #Specificity=(True Negatives (D))/(True Negatives (D)+False Positives (B)) 
+            SFE_Specificity = (SF_TNE)/(SF_TNE+SF_FPE)
+            #SC_Sensitivity = (SC_TP)/total
+            #print(SF_Specificity)
+            #Sensitivity=(True Positives (A))/(True Positives (A)+False Negatives (C))
+            SFE_Sensitivity = (SF_TPE)/(SF_TPE+SF_FNE)
+            #print(SF_Sensitivity)
+
+        accuracy_dict = {'Hormone':[], 'Sample':[], 'TP':[], 'FP':[], 'FN':[], 'TN':[], 'Accuracy':[], 'Specificity':[], 'Sensitivity':[]}
+
+        accuracy_dict['Hormone'].append('Progesterone')
+        accuracy_dict['Sample'].append('Saliva Clinic')
+        accuracy_dict['TP'].append(SC_TP)
+        accuracy_dict['FP'].append(SC_FP)
+        accuracy_dict['FN'].append(SC_FN)
+        accuracy_dict['TN'].append(SC_TN)
+        accuracy_dict['Accuracy'].append(SC_Accuracy)
+        accuracy_dict['Specificity'].append(SC_Specificity)
+        accuracy_dict['Sensitivity'].append(SC_Sensitivity)
+        accuracy_dict['Hormone'].append('Estradiol')
+        accuracy_dict['Sample'].append('Saliva Clinic')
+        accuracy_dict['TP'].append(SC_TPE)
+        accuracy_dict['FP'].append(SC_FPE)
+        accuracy_dict['FN'].append(SC_FNE)
+        accuracy_dict['TN'].append(SC_TNE)
+        accuracy_dict['Accuracy'].append(SCE_Accuracy)
+        accuracy_dict['Specificity'].append(SCE_Specificity)
+        accuracy_dict['Sensitivity'].append(SCE_Sensitivity)
+        accuracy_dict['Hormone'].append('Progesterone')
+        accuracy_dict['Sample'].append('Saliva Home')
+        accuracy_dict['TP'].append(SF_TP)
+        accuracy_dict['FP'].append(SF_FP)
+        accuracy_dict['FN'].append(SF_FN)
+        accuracy_dict['TN'].append(SF_TN)
+        accuracy_dict['Accuracy'].append(SF_Accuracy)
+        accuracy_dict['Specificity'].append(SF_Specificity)
+        accuracy_dict['Sensitivity'].append(SF_Sensitivity)
+        accuracy_dict['Hormone'].append('Estradiol')
+        accuracy_dict['Sample'].append('Saliva Home')
+        accuracy_dict['TP'].append(SF_TPE)
+        accuracy_dict['FP'].append(SF_FPE)
+        accuracy_dict['FN'].append(SF_FNE)
+        accuracy_dict['TN'].append(SF_TNE)
+        accuracy_dict['Accuracy'].append(SFE_Accuracy)
+        accuracy_dict['Specificity'].append(SFE_Specificity)
+        accuracy_dict['Sensitivity'].append(SFE_Sensitivity)
+
+        acc_df = pd.DataFrame(accuracy_dict)
+        acc_df.to_csv(os.path.join(path, 'linear_prediction_model_summary.csv'), index=False)
+
+        return data, acc_df
+
+class classifier_model():
+    def __init__(self, dataframe, path):
+        self.dataframe = dataframe
+        self.path = path
+    def machine_learning_data_transform(self):
+        data = self.dataframe
+        path = self.path
+
+        new_dict = {'ID':[],'Subgroup':[], 'SF_S1_E2':[], 'SF_S2_E2':[], 'SF_S3_E2':[], 'SF_S1_P4':[], 'SF_S2_P4':[], 'SF_S3_P4':[], 'SC_S1_E2':[], 'SC_S2_E2':[], 'SC_S3_E2':[], 'SC_S1_P4':[], 'SC_S2_P4':[], 'SC_S3_P4':[], 
+'BC_S1_E2':[], 'BC_S2_E2':[], 'BC_S3_E2':[], 'BC_S1_P4':[], 'BC_S2_P4':[], 'BC_S3_P4':[], 'SF_S1-3_E2_RelativeChange':[], 'SC_S1-3_E2_RelativeChange':[],'BC_S1-3_E2_RelativeChange':[], 'SF_S2-3_E2_RelativeChange':[], 
+'SC_S2-3_E2_RelativeChange':[], 'BC_S2-3_E2_RelativeChange':[], 'SF_S1-2_E2_RelativeChange':[], 'SC_S1-2_E2_RelativeChange':[], 'BC_S1-2_E2_RelativeChange':[], 'SF_S1-3_E2_AbsoluteChange':[], 'SC_S1-3_E2_AbsoluteChange':[], 'BC_S1-3_E2_AbsoluteChange':[], 
+'SF_S2-3_E2_AbsoluteChange':[], 'SC_S2-3_E2_AbsoluteChange':[], 'BC_S2-3_E2_AbsoluteChange':[], 'SF_S1-2_E2_AbsoluteChange':[], 'SC_S1-2_E2_AbsoluteChange':[], 'BC_S1-2_E2_AbsoluteChange':[], 
+'SF_S1-3_P4_RelativeChange':[], 'SC_S1-3_P4_RelativeChange':[], 'BC_S1-3_P4_RelativeChange':[], 'SF_S2-3_P4_RelativeChange':[], 'SC_S2-3_P4_RelativeChange':[], 'BC_S2-3_P4_RelativeChange':[], 
+'SF_S1-2_P4_RelativeChange':[], 'SC_S1-2_P4_RelativeChange':[], 'BC_S1-2_P4_RelativeChange':[], 'SF_S1-3_P4_AbsoluteChange':[], 'SC_S1-3_P4_AbsoluteChange':[], 'BC_S1-3_P4_AbsoluteChange':[], 
+'SF_S2-3_P4_AbsoluteChange':[], 'SC_S2-3_P4_AbsoluteChange':[], 'BC_S2-3_P4_AbsoluteChange':[], 'SF_S1-2_P4_AbsoluteChange':[], 'SC_S1-2_P4_AbsoluteChange':[], 'BC_S1-2_P4_AbsoluteChange':[],
+'SF_S1_E2:P4_Ratio':[], 'SC_S1_E2:P4_Ratio':[], 'BC_S1_E2:P4_Ratio':[],
+'SF_S2_E2:P4_Ratio':[], 'SC_S2_E2:P4_Ratio':[], 'BC_S2_E2:P4_Ratio':[], 'SF_S3_E2:P4_Ratio':[], 'SC_S3_E2:P4_Ratio':[], 'BC_S3_E2:P4_Ratio':[], 'BC_E2_Decision':[], 'BC_P4_Decision':[]}
+
+        patients = data['ID'].unique()
+
+        for p in patients:
+            #print(p)
+            new_dict['ID'].append(p)
+            subgroup = data.loc[data['ID']==p,'Subgroup'].values[0]
+            new_dict['Subgroup'].append(subgroup)
+            sf_s1_e2 = data.loc[(data['ID']==p) & (data['Round']==1.0),'SF_Estradiol (pg/mL)'].values
+            if len(sf_s1_e2)==0:
+                sf_s1_e2=[np.nan]
+            new_dict['SF_S1_E2'].append(sf_s1_e2[0])
+            sf_s2_e2 = data.loc[(data['ID']==p) & (data['Round']==2.0),'SF_Estradiol (pg/mL)'].values
+            if len(sf_s2_e2)==0:
+                sf_s2_e2 = [np.nan]
+            new_dict['SF_S2_E2'].append(sf_s2_e2[0])
+            sf_s3_e2 = data.loc[(data['ID']==p) & (data['Round']==3.0),'SF_Estradiol (pg/mL)'].values
+            if len(sf_s3_e2)==0:
+                sf_s3_e2 = [np.nan]
+            new_dict['SF_S3_E2'].append(sf_s3_e2[0])
+            sf_s1_p4 = data.loc[(data['ID']==p) & (data['Round']==1.0),'SF_Progesterone (pg/mL)'].values
+            if len(sf_s1_p4)==0:
+                sf_s1_p4 = [np.nan]
+            new_dict['SF_S1_P4'].append(sf_s1_p4[0])
+            sf_s2_p4 = data.loc[(data['ID']==p) & (data['Round']==2.0),'SF_Progesterone (pg/mL)'].values
+            if len(sf_s2_p4)==0:
+                sf_s2_p4 = [np.nan]
+            new_dict['SF_S2_P4'].append(sf_s2_p4[0])
+            sf_s3_p4 = data.loc[(data['ID']==p) & (data['Round']==3.0),'SF_Progesterone (pg/mL)'].values
+            if len(sf_s3_p4)==0:
+                sf_s3_p4 = [np.nan]
+            new_dict['SF_S3_P4'].append(sf_s3_p4[0])
+            sc_s1_e2 = data.loc[(data['ID']==p) & (data['Round']==1.0),'SC_Estradiol (pg/mL)'].values
+            if len(sc_s1_e2)==0:
+                sc_s1_e2 = [np.nan]
+            new_dict['SC_S1_E2'].append(sc_s1_e2[0])
+            sc_s2_e2 = data.loc[(data['ID']==p) & (data['Round']==2.0),'SC_Estradiol (pg/mL)'].values
+            if len(sc_s2_e2)==0:
+                sc_s2_e2 = [np.nan]
+            new_dict['SC_S2_E2'].append(sc_s2_e2[0])
+            sc_s3_e2 = data.loc[(data['ID']==p) & (data['Round']==3.0),'SC_Estradiol (pg/mL)'].values
+            if len(sc_s3_e2)==0:
+                sc_s3_e2 = [np.nan]
+            new_dict['SC_S3_E2'].append(sc_s3_e2[0])
+            sc_s1_p4 = data.loc[(data['ID']==p) & (data['Round']==1.0),'SC_Progesterone (pg/mL)'].values
+            if len(sc_s1_p4)==0:
+                sc_s1_p4 = [np.nan]
+            new_dict['SC_S1_P4'].append(sc_s1_p4[0])
+            sc_s2_p4 = data.loc[(data['ID']==p) & (data['Round']==2.0),'SC_Progesterone (pg/mL)'].values
+            if len(sc_s2_p4)==0:
+                sc_s2_p4 = [np.nan]
+            new_dict['SC_S2_P4'].append(sc_s2_p4[0])
+            sc_s3_p4 = data.loc[(data['ID']==p) & (data['Round']==3.0),'SC_Progesterone (pg/mL)'].values
+            if len(sc_s3_p4)==0:
+                sc_s3_p4 = [np.nan]
+            new_dict['SC_S3_P4'].append(sc_s3_p4[0])
+            bc_s1_e2 = data.loc[(data['ID']==p) & (data['Round']==1.0),'BC_Estradiol (pg/mL)'].values
+            if len(bc_s1_e2)==0:
+                bc_s1_e2 = [np.nan]
+            new_dict['BC_S1_E2'].append(bc_s1_e2[0])
+            bc_s2_e2 = data.loc[(data['ID']==p) & (data['Round']==2.0),'BC_Estradiol (pg/mL)'].values
+            if len(bc_s2_e2)==0:
+                bc_s2_e2 = [np.nan]
+            new_dict['BC_S2_E2'].append(bc_s2_e2[0])
+            bc_s3_e2 = data.loc[(data['ID']==p) & (data['Round']==3.0),'BC_Estradiol (pg/mL)'].values
+            if len(bc_s3_e2)==0:
+                bc_s3_e2 = [np.nan]
+            new_dict['BC_S3_E2'].append(bc_s3_e2[0])
+            bc_s1_p4 = data.loc[(data['ID']==p) & (data['Round']==1.0),'BC_Progesterone (pg/mL)'].values
+            if len(bc_s1_p4)==0:
+                bc_s1_p4 = [np.nan]
+            new_dict['BC_S1_P4'].append(bc_s1_p4[0])
+            bc_s2_p4 = data.loc[(data['ID']==p) & (data['Round']==2.0),'BC_Progesterone (pg/mL)'].values
+            if len(bc_s2_p4)==0:
+                bc_s2_p4 = [np.nan]
+            new_dict['BC_S2_P4'].append(bc_s2_p4[0])
+            bc_s3_p4 = data.loc[(data['ID']==p) & (data['Round']==3.0),'BC_Progesterone (pg/mL)'].values
+            if len(bc_s3_p4)==0:
+                bc_s3_p4 = [np.nan]
+            new_dict['BC_S3_P4'].append(bc_s3_p4[0])
+
+            
+            sf_s1_e2_ratio = sf_s1_e2[0]/sf_s1_p4[0]
+            new_dict['SF_S1_E2:P4_Ratio'].append(sf_s1_e2_ratio)
+            sf_s2_e2_ratio = sf_s2_e2[0]/sf_s2_p4[0]
+            new_dict['SF_S2_E2:P4_Ratio'].append(sf_s2_e2_ratio)
+            sf_s3_e2_ratio = sf_s3_e2[0]/sf_s3_p4[0]
+            new_dict['SF_S3_E2:P4_Ratio'].append(sf_s3_e2_ratio)
+            
+            sc_s1_e2_ratio = sc_s1_e2[0]/sc_s1_p4[0]
+            new_dict['SC_S1_E2:P4_Ratio'].append(sc_s1_e2_ratio)
+            sc_s2_e2_ratio = sc_s2_e2[0]/sc_s2_p4[0]
+            new_dict['SC_S2_E2:P4_Ratio'].append(sc_s2_e2_ratio)
+            sc_s3_e2_ratio = sc_s3_e2[0]/sc_s3_p4[0]
+            new_dict['SC_S3_E2:P4_Ratio'].append(sc_s3_e2_ratio)
+            
+            bc_s1_e2_ratio = bc_s1_e2[0]/bc_s1_p4[0]
+            new_dict['BC_S1_E2:P4_Ratio'].append(bc_s1_e2_ratio)
+            bc_s2_e2_ratio = bc_s2_e2[0]/bc_s2_p4[0]
+            new_dict['BC_S2_E2:P4_Ratio'].append(bc_s2_e2_ratio)
+            bc_s3_e2_ratio = bc_s3_e2[0]/bc_s3_p4[0]
+            new_dict['BC_S3_E2:P4_Ratio'].append(bc_s3_e2_ratio)
+          
+            new_dict['SF_S1-3_E2_RelativeChange'].append((sf_s3_e2[0] - sf_s1_e2[0])/sf_s1_e2[0])
+            new_dict['SC_S1-3_E2_RelativeChange'].append((sc_s3_e2[0] - sc_s1_e2[0])/sc_s1_e2[0])
+            new_dict['BC_S1-3_E2_RelativeChange'].append((bc_s3_e2[0] - bc_s1_e2[0])/bc_s1_e2[0])
+            new_dict['SF_S2-3_E2_RelativeChange'].append((sf_s3_e2[0] - sf_s2_e2[0])/sf_s2_e2[0])
+            new_dict['SC_S2-3_E2_RelativeChange'].append((sc_s3_e2[0] - sc_s2_e2[0])/sc_s2_e2[0])
+            new_dict['BC_S2-3_E2_RelativeChange'].append((bc_s3_e2[0] - bc_s2_e2[0])/bc_s2_e2[0])
+            new_dict['SF_S1-3_P4_RelativeChange'].append((sf_s3_p4[0] - sf_s1_p4[0])/sf_s1_p4[0])
+            new_dict['SC_S1-3_P4_RelativeChange'].append((sc_s3_p4[0] - sc_s1_p4[0])/sc_s1_p4[0])
+            new_dict['BC_S1-3_P4_RelativeChange'].append((bc_s3_p4[0] - bc_s1_p4[0])/bc_s1_p4[0])
+            new_dict['SF_S2-3_P4_RelativeChange'].append((sf_s3_p4[0] - sf_s2_p4[0])/sf_s2_p4[0])
+            new_dict['SC_S2-3_P4_RelativeChange'].append((sc_s3_p4[0] - sc_s2_p4[0])/sc_s2_p4[0])
+            new_dict['BC_S2-3_P4_RelativeChange'].append((bc_s3_p4[0] - bc_s2_p4[0])/bc_s2_p4[0])
+            new_dict['SF_S1-2_E2_RelativeChange'].append((sf_s2_e2[0] - sf_s1_e2[0])/sf_s1_e2[0])
+            new_dict['SC_S1-2_E2_RelativeChange'].append((sc_s2_e2[0] - sc_s1_e2[0])/sc_s1_e2[0])
+            new_dict['BC_S1-2_E2_RelativeChange'].append((bc_s2_e2[0] - bc_s1_e2[0])/bc_s1_e2[0])
+            new_dict['SF_S1-2_P4_RelativeChange'].append((sf_s2_p4[0] - sf_s1_p4[0])/sf_s1_p4[0])
+            new_dict['SC_S1-2_P4_RelativeChange'].append((sc_s2_p4[0] - sc_s1_p4[0])/sc_s1_p4[0])
+            new_dict['BC_S1-2_P4_RelativeChange'].append((bc_s2_p4[0] - bc_s1_p4[0])/bc_s1_p4[0])
+            new_dict['SF_S1-3_E2_AbsoluteChange'].append(sf_s3_e2[0] - sf_s1_e2[0])
+            new_dict['SC_S1-3_E2_AbsoluteChange'].append(sc_s3_e2[0] - sc_s1_e2[0])
+            new_dict['BC_S1-3_E2_AbsoluteChange'].append(bc_s3_e2[0] - bc_s1_e2[0])
+            new_dict['SF_S2-3_E2_AbsoluteChange'].append(sf_s3_e2[0] - sf_s2_e2[0])
+            new_dict['SC_S2-3_E2_AbsoluteChange'].append(sc_s3_e2[0] - sc_s2_e2[0])
+            new_dict['BC_S2-3_E2_AbsoluteChange'].append(bc_s3_e2[0] - bc_s2_e2[0])
+            new_dict['SF_S1-3_P4_AbsoluteChange'].append(sf_s3_p4[0] - sf_s1_p4[0])
+            new_dict['SC_S1-3_P4_AbsoluteChange'].append(sc_s3_p4[0] - sc_s1_p4[0])
+            new_dict['BC_S1-3_P4_AbsoluteChange'].append(bc_s3_p4[0] - bc_s1_p4[0])
+            new_dict['SF_S2-3_P4_AbsoluteChange'].append(sf_s3_p4[0] - sf_s2_p4[0])
+            new_dict['SC_S2-3_P4_AbsoluteChange'].append(sc_s3_p4[0] - sc_s2_p4[0])
+            new_dict['BC_S2-3_P4_AbsoluteChange'].append(bc_s3_p4[0] - bc_s2_p4[0])
+            new_dict['SF_S1-2_E2_AbsoluteChange'].append(sf_s2_e2[0] - sf_s1_e2[0])
+            new_dict['SC_S1-2_E2_AbsoluteChange'].append(sc_s2_e2[0] - sc_s1_e2[0])
+            new_dict['BC_S1-2_E2_AbsoluteChange'].append(bc_s2_e2[0] - bc_s1_e2[0])
+            new_dict['SF_S1-2_P4_AbsoluteChange'].append(sf_s2_p4[0] - sf_s1_p4[0])
+            new_dict['SC_S1-2_P4_AbsoluteChange'].append(sc_s2_p4[0] - sc_s1_p4[0])
+            new_dict['BC_S1-2_P4_AbsoluteChange'].append(bc_s2_p4[0] - bc_s1_p4[0])
+            if len(data.loc[(data['ID']==p) & (data['Round'] ==3.0)])>0:
+                bc_e2_decision = data.loc[(data['ID']==p) & (data['Round'] ==3.0), 'BC_E_TRIGGER'].values[0]
+                bc_p4_decision = data.loc[(data['ID']==p) & (data['Round'] ==3.0), 'BC_TRIGGER'].values[0]
+            elif len(data.loc[(data['ID']==p) & (data['Round'] ==2.0)])>0:
+                bc_e2_decision = data.loc[(data['ID']==p) & (data['Round'] ==2.0), 'BC_E_TRIGGER'].values[0]
+                bc_p4_decision = data.loc[(data['ID']==p) & (data['Round'] ==2.0), 'BC_TRIGGER'].values[0]
+            else:
+                bc_e2_decision = data.loc[(data['ID']==p) & (data['Round'] ==1.0), 'BC_E_TRIGGER'].values[0]
+                bc_p4_decision = data.loc[(data['ID']==p) & (data['Round'] ==1.0), 'BC_TRIGGER'].values[0]
+            #print(bc_e2_decision)
+            new_dict['BC_E2_Decision'].append(bc_e2_decision) 
+            new_dict['BC_P4_Decision'].append(bc_p4_decision)    
+        data=pd.DataFrame(new_dict)
+        data.to_csv(path+'machine_learning_dataframe.csv')
+        return data
+
+    
+
+
 
     # regression y prediction, alpha, beta, residual error, mean squared error, y predicted, thresholding, trigger decision classification, acc, spec, sens
 
@@ -305,7 +955,7 @@ class data_analysis():
 
 
 
-init_data = initial_data_handling('data/data.csv')
+init_data = initial_data_handling("C:/Users/KatherineRidley/Mint Diagnostics Ltd/Mint Drive - Documents/Data/IVI_serumvsaliva_KR/Results_1_2_3_collated_KR.csv")
 
 barcode_split_dataframe = init_data.get_sample_data_from_barcode()
 # Returns new dataframe that has been modified by the funciton.
@@ -315,33 +965,77 @@ barcode_split_dataframe = init_data.get_sample_data_from_barcode()
 # But we've made a varibale - barcode_split_dataframe - which does the same thing
 
 
-variable_information = init_data.get_variable_information(barcode_split_dataframe)
+variable_information = init_data.get_variable_information_group_a(barcode_split_dataframe)
 
 progesterone_scaled_to_pg_dataframe = init_data.scale_progesterone_to_pg(variable_information)
 
+#print(progesterone_scaled_to_pg_dataframe)
+
 init_data = data_cleaning(progesterone_scaled_to_pg_dataframe)
 
+
+
 # choose an outlier removal method :
-outliers_removed = init_data.remove_outliers_3std_method()
+data=progesterone_scaled_to_pg_dataframe
 
-#outliers_removed = init_data.remove_outliers_between_1_99_quantile_method()
+samples = [(data['Sample'].str.contains('F')), (data['Sample'].str.contains('C'))]
+types = list(data['Type'].unique())
 
-quartile_split_dataframe = init_data.split_data_into_quartiles(outliers_removed)
+for s in samples:
+    for t in types:
+        data=data.loc[s & (data['Type']==t)]
+        if len(data)>0:
 
-scaled_reformatted_data = init_data.scale_and_format_dataframe(quartile_split_dataframe)
+            outliers_removed = init_data.remove_outliers_3std_method()
+            #outliers_removed = init_data.remove_outliers_between_1_99_quantile_method()
+            quartile_split_dataframe = init_data.split_data_into_quartiles(outliers_removed)
+            scaled_reformatted_data = init_data.scale_and_format_dataframe(quartile_split_dataframe)
+
+
+#print('3', scaled_reformatted_data)
+#print(scaled_reformatted_data['Type'].unique())
 
 numeric_variable_dataframe = init_data.variables_to_numeric(scaled_reformatted_data)
 
+#print('4', numeric_variable_dataframe)
+#print(numeric_variable_dataframe['Type'].unique())
+
 string_adjusted_dataframe = init_data.adjust_string_variables(numeric_variable_dataframe)
+
+
 
 handled_dataframe_for_plotting = init_data.binarize_time_variable(string_adjusted_dataframe)
 
 
 transposed_dataframe_for_correlation_and_regression = init_data.transpose_data_for_correlation(handled_dataframe_for_plotting)
 
-init_data=data_analysis(transposed_dataframe_for_correlation_and_regression)
+init_data=data_analysis(transposed_dataframe_for_correlation_and_regression, 
+'C:/Users/KatherineRidley/Mint Diagnostics Ltd/Mint Drive - Documents/Data/IVI_serumvsaliva_KR/')
+
+init_data.linearmodelplot()
+init_data.correlation_matrix()
+init_data.OLS_regression()
+init_data.jointplot()
+init_data.pairplot()
+init_data.blandaltman()
+
+transposed_dataframe_with_reg_var, accuracy_results_dataframe = init_data.linear_predict_y()
+
+print(accuracy_results_dataframe)
+
+init_data = classifier_model(transposed_dataframe_with_reg_var, 
+'C:/Users/KatherineRidley/Mint Diagnostics Ltd/Mint Drive - Documents/Data/IVI_serumvsaliva_KR/')
+
+ml_data_prepped=init_data.machine_learning_data_transform()
+print(ml_data_prepped)
 
 
+
+
+
+
+#machine learning analysis
+# pick out FN and FP from the accuracy_results_dataframe, identify characteristics of the data, and then use machine learning to predict the outcome
 
 
 
